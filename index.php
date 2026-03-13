@@ -935,13 +935,26 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
             background: linear-gradient(135deg, var(--lazada-primary) 0%, #303f9f 100%);
             color: white;
             border-radius: 12px;
-            padding: 10px;
+            padding: 16px;
             text-align: center;
+        }
+        
+        .stats-card i.fs-3 {
+            font-size: 2rem !important;
+            margin-bottom: 6px;
+            display: block;
         }
         
         .stats-card h3 {
             font-size: 1.8rem;
             font-weight: 700;
+            margin: 8px 0 6px;
+            line-height: 1.1;
+        }
+        
+        .stats-card small {
+            font-size: 0.85rem;
+            opacity: 0.9;
         }
         
         .stats-card.green {
@@ -1644,12 +1657,12 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                                         <div class="col-md-4 mb-3">
                                             <label class="form-label">Từ ngày <span class="text-danger">*</span></label>
                                             <input type="date" class="form-control" name="date_start" id="dateStart"
-                                                   value="<?= date('Y-m-d', strtotime('-7 days')) ?>" required>
+                                                   value="<?= date('Y-m-d', strtotime('-1 day')) ?>" required>
                                         </div>
                                         <div class="col-md-4 mb-3">
                                             <label class="form-label">Đến ngày <span class="text-danger">*</span></label>
                                             <input type="date" class="form-control" name="date_end" id="dateEnd"
-                                                   value="<?= date('Y-m-d') ?>" required>
+                                                   value="<?= date('Y-m-d', strtotime('-1 day')) ?>" required>
                                         </div>
                                         <div class="col-md-4 mb-3">
                                             <label class="form-label">Số kết quả/trang hiển thị</label>
@@ -1866,16 +1879,15 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
             const dailyData = {};
             allDates.forEach(date => {
                 dailyData[date] = {
-                    orderCount: 0,
+                    orderIds: new Set(),
+                    excludedOrderIds: new Set(),
                     payout: 0,
-                    orderAmt: 0,
-                    excludedCount: 0
+                    orderAmt: 0
                 };
             });
             
             // Aggregate conversions
             conversions.forEach(c => {
-                // Get date from conversionTime or fulfilledTime
                 const timeStr = c.conversionTime || c.fulfilledTime || '';
                 if (!timeStr) return;
                 
@@ -1883,7 +1895,6 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                 try {
                     const date = new Date(timeStr);
                     if (isNaN(date.getTime())) return;
-                    // Use local timezone instead of UTC
                     const year = date.getFullYear();
                     const month = String(date.getMonth() + 1).padStart(2, '0');
                     const day = String(date.getDate()).padStart(2, '0');
@@ -1894,10 +1905,12 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                 
                 if (dailyData[dateKey]) {
                     const excludeType = isExcludedOrder(c);
+                    const orderId = c.orderId || ('_' + Math.random());
                     if (excludeType) {
-                        dailyData[dateKey].excludedCount++;
+                        dailyData[dateKey].excludedOrderIds.add(orderId);
                     } else {
-                        dailyData[dateKey].orderCount++;
+                        dailyData[dateKey].orderIds.add(orderId);
+                        // estPayout là per sản phẩm, cộng tất cả các dòng (giống card thống kê)
                         dailyData[dateKey].payout += parseFloat(c.estPayout || 0);
                         dailyData[dateKey].orderAmt += parseFloat(c.orderAmt || 0);
                     }
@@ -1907,17 +1920,16 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
             return {
                 dates: allDates,
                 labels: allDates.map(formatDateShort),
-                orderCounts: allDates.map(d => dailyData[d].orderCount),
+                orderCounts: allDates.map(d => dailyData[d].orderIds.size),
                 payouts: allDates.map(d => Math.round(dailyData[d].payout)),
                 orderAmts: allDates.map(d => Math.round(dailyData[d].orderAmt)),
-                excludedCounts: allDates.map(d => dailyData[d].excludedCount)
+                excludedCounts: allDates.map(d => dailyData[d].excludedOrderIds.size)
             };
         }
         
         function renderDailyChart(conversions, dateStart, dateEnd) {
             const chartData = aggregateDataByDate(conversions, dateStart, dateEnd);
             
-            // Destroy existing chart if any
             if (dailyChart) {
                 dailyChart.destroy();
             }
@@ -1925,33 +1937,78 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
             const ctx = document.getElementById('dailyChart');
             if (!ctx) return;
             
+            const isSingleDay = chartData.labels.length === 1;
+            
+            // Giới hạn độ rộng cột: max 80px/cột, tính theo số ngày
+            const numDays = chartData.labels.length;
+            // Với ít ngày, dùng maxBarThickness để cột không quá to
+            const maxBarThick = numDays <= 3 ? 60 : numDays <= 7 ? 80 : undefined;
+            
+            let datasets;
+            
+            if (isSingleDay) {
+                // 1 ngày: 2 cột bar grouped sát nhau
+                datasets = [
+                    {
+                        label: 'Số đơn',
+                        data: chartData.orderCounts,
+                        backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 1,
+                        yAxisID: 'y',
+                        order: 1,
+                        maxBarThickness: 100,
+                        barPercentage: 0.9,
+                        categoryPercentage: 0.4
+                    },
+                    {
+                        label: 'Hoa hồng (₫)',
+                        data: chartData.payouts,
+                        backgroundColor: 'rgba(75, 192, 192, 0.8)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1,
+                        yAxisID: 'y1',
+                        order: 2,
+                        maxBarThickness: 100,
+                        barPercentage: 0.9,
+                        categoryPercentage: 0.4
+                    }
+                ];
+            } else {
+                // Nhiều ngày: bar hoa hồng + line số đơn
+                datasets = [
+                    {
+                        label: 'Hoa hồng (₫)',
+                        data: chartData.payouts,
+                        backgroundColor: 'rgba(75, 192, 192, 0.8)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1,
+                        yAxisID: 'y1',
+                        order: 2,
+                        maxBarThickness: maxBarThick,
+                        barPercentage: 0.6,
+                        categoryPercentage: 0.7
+                    },
+                    {
+                        label: 'Số đơn',
+                        data: chartData.orderCounts,
+                        backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 2,
+                        type: 'line',
+                        yAxisID: 'y',
+                        order: 1,
+                        tension: 0.3,
+                        fill: false
+                    }
+                ];
+            }
+            
             dailyChart = new Chart(ctx, {
                 type: 'bar',
                 data: {
                     labels: chartData.labels,
-                    datasets: [
-                        {
-                            label: 'Hoa hồng (₫)',
-                            data: chartData.payouts,
-                            backgroundColor: 'rgba(75, 192, 192, 0.8)',
-                            borderColor: 'rgba(75, 192, 192, 1)',
-                            borderWidth: 1,
-                            yAxisID: 'y1',
-                            order: 2
-                        },
-                        {
-                            label: 'Số đơn',
-                            data: chartData.orderCounts,
-                            backgroundColor: 'rgba(54, 162, 235, 0.6)',
-                            borderColor: 'rgba(54, 162, 235, 1)',
-                            borderWidth: 2,
-                            type: 'line',
-                            yAxisID: 'y',
-                            order: 1,
-                            tension: 0.3,
-                            fill: false
-                        }
-                    ]
+                    datasets: datasets
                 },
                 options: {
                     responsive: true,
@@ -1966,13 +2023,8 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                         },
                         tooltip: {
                             backgroundColor: 'rgba(0, 0, 0, 0.85)',
-                            titleFont: {
-                                size: 14,
-                                weight: 'bold'
-                            },
-                            bodyFont: {
-                                size: 13
-                            },
+                            titleFont: { size: 14, weight: 'bold' },
+                            bodyFont: { size: 13 },
                             padding: 12,
                             cornerRadius: 8,
                             displayColors: false,
@@ -1980,30 +2032,22 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                                 title: function(context) {
                                     const index = context[0].dataIndex;
                                     const dateStr = chartData.dates[index];
-                                    // Format to dd/mm/yyyy
                                     const parts = dateStr.split('-');
                                     return `${parts[2]}/${parts[1]}/${parts[0]}`;
                                 },
-                                label: function(context) {
-                                    return null; // We'll use afterBody instead
-                                },
+                                label: function(context) { return null; },
                                 afterBody: function(context) {
                                     const index = context[0].dataIndex;
                                     const orderCount = chartData.orderCounts[index];
                                     const payout = chartData.payouts[index];
                                     const orderAmt = chartData.orderAmts[index];
                                     const excluded = chartData.excludedCounts[index];
-                                    
                                     const lines = [
                                         `Đơn hợp lệ: ${orderCount}`,
                                         `Hoa hồng ước tính: ${formatNumber(payout)}đ`,
                                         `Doanh số: ${formatNumber(orderAmt)}đ`
                                     ];
-                                    
-                                    if (excluded > 0) {
-                                        lines.push(`Hủy/Hoàn: ${excluded}`);
-                                    }
-                                    
+                                    if (excluded > 0) lines.push(`Hủy/Hoàn: ${excluded}`);
                                     return lines;
                                 }
                             }
@@ -2011,9 +2055,7 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                     },
                     scales: {
                         x: {
-                            grid: {
-                                display: false
-                            }
+                            grid: { display: false }
                         },
                         y: {
                             type: 'linear',
@@ -2023,24 +2065,17 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                             ticks: {
                                 stepSize: 1,
                                 callback: function(value) {
-                                    if (Number.isInteger(value)) {
-                                        return value;
-                                    }
+                                    if (Number.isInteger(value)) return value;
                                 }
                             },
-                            title: {
-                                display: true,
-                                text: 'Số đơn'
-                            }
+                            title: { display: true, text: 'Số đơn' }
                         },
                         y1: {
                             type: 'linear',
                             display: true,
                             position: 'right',
                             beginAtZero: true,
-                            grid: {
-                                drawOnChartArea: false,
-                            },
+                            grid: { drawOnChartArea: false },
                             ticks: {
                                 callback: function(value) {
                                     return new Intl.NumberFormat('vi-VN', { 
@@ -2049,10 +2084,7 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                                     }).format(value);
                                 }
                             },
-                            title: {
-                                display: true,
-                                text: 'Hoa hồng (₫)'
-                            }
+                            title: { display: true, text: 'Hoa hồng (₫)' }
                         }
                     }
                 }
@@ -2442,6 +2474,15 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                 hideLoading();
                 btn.classList.remove('btn-loading');
                 
+                // Sort theo orderId để các sản phẩm cùng đơn nằm liền nhau
+                allConversions.sort((a, b) => {
+                    const oidA = a.orderId || '';
+                    const oidB = b.orderId || '';
+                    if (oidA < oidB) return -1;
+                    if (oidA > oidB) return 1;
+                    return 0;
+                });
+                
                 conversionState.allData = allConversions;
                 conversionState.filteredData = [...allConversions];
                 conversionState.totalPages = Math.ceil(allConversions.length / conversionState.perPage) || 1;
@@ -2511,34 +2552,44 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
             const container = document.getElementById('conversionResult');
             const conversions = conversionState.allData;
             
-            let validOrderCount = 0;
             let totalPayout = 0;
             let totalOrderAmt = 0;
             let rejectedCount = 0;
             let returnedCount = 0;
             let cancelledCount = 0;
             
+            // Dùng Set để đếm đơn hàng duy nhất theo orderId
+            const validOrderIds = new Set();
+            const rejectedOrderIds = new Set();
+            const returnedOrderIds = new Set();
+            const cancelledOrderIds = new Set();
+            
             conversions.forEach(c => {
                 const excludeType = isExcludedOrder(c);
+                const orderId = c.orderId || ('_idx_' + Math.random()); // fallback nếu không có orderId
                 
                 if (excludeType === 'rejected') {
-                    rejectedCount++;
+                    rejectedOrderIds.add(orderId);
                     return;
                 }
                 if (excludeType === 'returned') {
-                    returnedCount++;
+                    returnedOrderIds.add(orderId);
                     return;
                 }
                 if (excludeType === 'cancelled') {
-                    cancelledCount++;
+                    cancelledOrderIds.add(orderId);
                     return;
                 }
                 
-                validOrderCount++;
+                validOrderIds.add(orderId);
                 totalPayout += parseFloat(c.estPayout || 0);
                 totalOrderAmt += parseFloat(c.orderAmt || 0);
             });
             
+            const validOrderCount = validOrderIds.size;
+            rejectedCount = rejectedOrderIds.size;
+            returnedCount = returnedOrderIds.size;
+            cancelledCount = cancelledOrderIds.size;
             const excludedCount = rejectedCount + returnedCount + cancelledCount;
             
             let html = '<div class="result-container"><hr class="my-4">';
@@ -2588,7 +2639,7 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                         <small>
                             Đã loại trừ <strong>${excludedCount}</strong> đơn khỏi thống kê:
                             ${excludeDetails.join(', ')}
-                            | Tổng số đơn: ${conversions.length}
+                            | Tổng số đơn (theo mã): ${validOrderCount + rejectedCount + returnedCount + cancelledCount}
                         </small>
                     </div>
                 `;
@@ -2698,6 +2749,29 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                         <tbody>
             `;
             
+            // Tính rowspan cho mỗi orderId trong pageData
+            const orderRowspan = {};
+            const orderFirstIndex = {};
+            let orderCounter = 0;
+            let lastOrderId = null;
+            pageData.forEach((c, index) => {
+                const oid = c.orderId || 'N/A';
+                if (oid !== lastOrderId) {
+                    orderCounter++;
+                    orderFirstIndex[index] = orderCounter + startIndex;
+                    orderRowspan[index] = 1;
+                    lastOrderId = oid;
+                } else {
+                    // Tìm index đầu tiên của nhóm này để tăng rowspan
+                    for (let i = index - 1; i >= 0; i--) {
+                        if (orderFirstIndex[i] !== undefined) {
+                            orderRowspan[i]++;
+                            break;
+                        }
+                    }
+                }
+            });
+
             pageData.forEach((c, index) => {
                 const isExcluded = isExcludedOrder(c);
                 const status = c.status || 'N/A';
@@ -2715,24 +2789,31 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
                 const skuName = c.skuName || 'N/A';
                 const displayName = skuName.length > 40 ? skuName.substring(0, 40) + '...' : skuName;
                 const rate = formatCommissionRate(c.commissionRate || 0);
-                const globalIndex = startIndex + index + 1;
+                
+                const isFirstInGroup = orderFirstIndex[index] !== undefined;
+                const rowspan = orderRowspan[index] || 1;
+                const orderNum = orderFirstIndex[index];
+                
+                const tooltipContent = escapeHtml(skuName) + (c.brandName ? ' | ' + escapeHtml(c.brandName) : '');
                 
                 html += `
                     <tr class="${isExcluded ? 'excluded-row' : ''}">
-                        <td>${globalIndex}</td>
-                        <td><small class="text-muted">${highlightText(c.orderId || 'N/A', searchTerm)}</small></td>
-                        <td style="max-width: 180px;">
-                            <small class="d-block text-truncate" title="${escapeHtml(skuName)}">${highlightText(displayName, searchTerm)}</small>
-                            <small class="text-muted">${highlightText(c.brandName || '', searchTerm)}</small>
+                        ${isFirstInGroup ? `<td rowspan="${rowspan}" class="align-middle text-center fw-bold" style="vertical-align:middle!important;border-right:2px solid var(--bs-border-color)">${orderNum}</td>` : ''}
+                        <td class="align-middle"><small class="text-muted">${highlightText(c.orderId || 'N/A', searchTerm)}</small></td>
+                        <td style="max-width: 180px;" class="align-middle">
+                            <small class="d-block text-truncate" 
+                                   data-bs-toggle="tooltip" 
+                                   data-bs-placement="top" 
+                                   title="${tooltipContent}"
+                                   style="cursor:default">${highlightText(displayName, searchTerm)}</small>
                         </td>
-                        <td>
+                        <td class="align-middle">
                             <span class="badge bg-${statusClass}">${escapeHtml(status)}</span>
-                            ${validity && validity.toLowerCase() !== 'valid' ? `<br><small class="text-${isExcluded ? 'danger' : 'warning'}">${escapeHtml(validity)}</small>` : ''}
                         </td>
-                        <td class="text-end">${formatNumber(Math.round(parseFloat(c.orderAmt || 0)))}</td>
-                        <td class="text-end">${rate}</td>
-                        <td class="text-end ${isExcluded ? '' : 'text-success fw-bold'}">${formatNumber(Math.round(parseFloat(c.estPayout || 0)))}</td>
-                        <td><small>${escapeHtml(formatDateTime(c.conversionTime || c.fulfilledTime || 'N/A'))}</small></td>
+                        <td class="text-end align-middle">${formatNumber(Math.round(parseFloat(c.orderAmt || 0)))}</td>
+                        <td class="text-end align-middle">${rate}</td>
+                        <td class="text-end align-middle ${isExcluded ? '' : 'text-success fw-bold'}">${formatNumber(Math.round(parseFloat(c.estPayout || 0)))}</td>
+                        <td class="align-middle"><small>${escapeHtml(formatDateTime(c.conversionTime || c.fulfilledTime || 'N/A'))}</small></td>
                     </tr>
                 `;
             });
@@ -2773,6 +2854,10 @@ $configComplete = !empty($config['app_key']) && !empty($config['app_secret']) &&
             html += '</div>';
             
             container.innerHTML = html;
+            
+            // Khởi tạo Bootstrap tooltips
+            const tooltipEls = container.querySelectorAll('[data-bs-toggle="tooltip"]');
+            tooltipEls.forEach(el => new bootstrap.Tooltip(el, { trigger: 'hover' }));
         }
         
         function clearSearch() {
